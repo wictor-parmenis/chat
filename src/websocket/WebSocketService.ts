@@ -4,6 +4,10 @@ import { CreateUserService } from '../services/user/CreateUserService'
 import { GetAllUsersService } from "../services/user/GetAllUsersService";
 import { CreateChatRoomService } from "../services/chatRoom/CreateChatRoomService";
 import { GetUserBySocketIdService } from "../services/user/GetUserBySocketIdService";
+import { GetChatRoomByUsersService } from "../services/chatRoom/GetChatRoomByUsersService";
+import { GetChatRoomByIdService } from "../services/chatRoom/GetChatRoomByIdService";
+import { CreateMessageService } from "../services/message/CreateMessageService";
+import { GetMessagesByChatRoomService } from "../services/message/GetMessagesByChatRoomService";
 
 io.on('connect', (socket) => {
     socket.on('start', async (data) => {
@@ -31,10 +35,48 @@ io.on('connect', (socket) => {
     socket.on('start_chat', async (data, callback) => {
         const createChatRoomService = container.resolve(CreateChatRoomService);
         const getUserBySocketIdService = container.resolve(GetUserBySocketIdService);
-        const userLogged = await getUserBySocketIdService.execute(socket.id);
-        const chatRoom = await createChatRoomService.execute([userLogged._id, data.idUser]);
+        const getChatRoomByUsersService = container.resolve(GetChatRoomByUsersService);
+        const getMessagesByChatRoomService = container.resolve(GetMessagesByChatRoomService);
 
-        console.log(chatRoom , 'chatRoom');
-        callback({chatRoom});
-    } )
+        const userLogged = await getUserBySocketIdService.execute(socket.id);
+        let room = await getChatRoomByUsersService.execute( [userLogged._id, data.idUser] );
+        if (!room) { 
+            room = await createChatRoomService.execute([userLogged._id, data.idUser]);
+        }
+
+        socket.join(room.id_chat_room);
+
+        const messages = await getMessagesByChatRoomService.execute(room.id_chat_room);
+
+        callback({room, messages});
+    })
+
+    socket.on('message', async (data) => {
+        const getUserBySocketIdService = container.resolve(GetUserBySocketIdService);
+        const createMessageService = container.resolve(CreateMessageService);
+        const getChatRoomByIdService = container.resolve(GetChatRoomByIdService);
+        const user = await getUserBySocketIdService.execute(socket.id);
+
+        const message = await createMessageService.execute({
+            to: user._id,
+            text: data.message,
+            room_id: data.idChatRoom
+        })
+
+        io.to(data.idChatRoom).emit('message', {
+            message,
+            user,
+        });
+
+        const room = await getChatRoomByIdService.execute(data.idChatRoom);
+        const users = room.id_users;
+
+        const userFrom = users.find(response => String(response._id) !== String(user._id));
+
+        io.to(userFrom.socket_id).emit('notification', { 
+            new_message: true,
+            room_id: data.idChatRoom,
+            from: user,
+        })
+    })
 })
